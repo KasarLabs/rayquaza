@@ -1,0 +1,13 @@
+[package]
+name = "rayquaza-exec"
+version = "0.1.0"
+edition = "2021"
+authors = ["Nils Mathieu <contact@nils-mathieu.fr>"]
+description = "high performance StarkNet execution client"
+repository = "https://github.com/KasarLabs/rayquaza"
+license = "MIT"
+readme = "README.md"
+keywords = ["starknet"]
+
+[dependencies]
+stark-felt = { git = "https://github.com/nils-mathieu/types-rs" }
