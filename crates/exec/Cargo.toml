@@ -1,0 +1,11 @@
+[package]
+name = "rayquaza-exec"
+version = "0.1.0"
+keywords = ["starknet"]
+description = "A high performance Starknet execution client."
+
+edition.workspace = true
+repository.workspace = true
+readme.workspace = true
+authors.workspace = true
+license.workspace = true
