@@ -8,3 +8,4 @@ authors = ["Nils Mathieu <contact@nils-mathieu.fr>"]
 repository = "https://github.com/KasarLabs/rayquaza"
 license = "MIT"
 readme = "README.md"
+publish = false # TODO: can't publish until rebrand

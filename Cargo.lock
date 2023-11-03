@@ -9,6 +9,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 
 [[package]]
+name = "bitflags"
+version = "2.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "327762f6e5a765692301e5bb513e0d9fef63be86bbc14528052b1cd3e6f03e07"
+
+[[package]]
 name = "bitvec"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -29,8 +35,7 @@ checksum = "e6d5a32815ae3f33302d95fdcb2ce17862f8c65363dcfd29360480ba1001fc9c"
 [[package]]
 name = "lambdaworks-math"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d42a591b9e2e587277c9ab2f0c16605364bb474d1d17a68dd2ee40f10fa473c6"
+source = "git+https://github.com/lambdaclass/lambdaworks.git?rev=f940e14ed17370d29fe129951448037d11b65ce8#f940e14ed17370d29fe129951448037d11b65ce8"
 
 [[package]]
 name = "num-traits"
@@ -73,7 +78,9 @@ version = "0.1.0"
 name = "rayquaza-vm"
 version = "0.1.0"
 dependencies = [
- "stark-felt",
+ "bitflags",
+ "num-traits",
+ "starknet-types-core",
 ]
 
 [[package]]
@@ -97,9 +104,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "stark-felt"
+name = "starknet-types-core"
 version = "0.0.3"
-source = "git+https://github.com/nils-mathieu/types-rs#0fc724049bbf17dd48acf1fd19a4a973bb594343"
+source = "git+https://github.com/nils-mathieu/types-rs#30e0df9a7ddaba081a93c7595ed1eefbc52a84c8"
 dependencies = [
  "bitvec",
  "lambdaworks-math",

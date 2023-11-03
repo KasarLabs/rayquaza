@@ -4,6 +4,7 @@ version = "0.1.0"
 keywords = ["starknet"]
 description = "A high performance Starknet execution client."
 
+publish.workspace = true
 edition.workspace = true
 repository.workspace = true
 readme.workspace = true

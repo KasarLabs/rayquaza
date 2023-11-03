@@ -4,6 +4,7 @@ version = "0.1.0"
 keywords = ["starknet", "cairo"]
 description = "A high performance virtual machine for Cairo."
 
+publish.workspace = true
 edition.workspace = true
 repository.workspace = true
 readme.workspace = true
@@ -11,4 +12,6 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
-stark-felt = { git = "https://github.com/nils-mathieu/types-rs" }
+starknet-types-core = { git = "https://github.com/nils-mathieu/types-rs" }
+num-traits = "0.2"
+bitflags = "2"
