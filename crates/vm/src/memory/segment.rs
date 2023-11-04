@@ -136,6 +136,53 @@ impl Segment {
         }
     }
 
+    /// Sets the value of a memory cell, eventually overriding its previous value.
+    ///
+    /// # Notes
+    ///
+    /// This function should generally not be used unless:
+    ///
+    /// 1. You know that the memory cell has not been asserted to a specific value yet.
+    ///
+    /// 2. You know that the memory cell has the same value as the one you're trying to set it to.
+    ///
+    /// Failing to meet those requirements may result in a contradiction.
+    ///
+    /// The "safe" equivalent of this function is [`assert_eq`](Self::assert_eq).
+    ///
+    /// # Panics
+    ///
+    /// When debug assertions are enabled, this function will panic if a contradiction is detected.
+    pub fn set(&mut self, index: usize, value: ValueRef) -> Result<(), Error> {
+        self.grow_for_index(index)?;
+
+        // SAFETY:
+        //  We just made sure that the index is in bounds of the segment's initialized length.
+        let (metadata, cell) = unsafe { self.get_unchecked_raw_mut(index) };
+
+        #[cfg(debug_assertions)]
+        {
+            match *metadata {
+                Metadata::Unknown => (),
+                Metadata::Pointer => assert_eq!(
+                    value,
+                    ValueRef::Pointer(unsafe { &cell.pointer }),
+                    "`Segment::set`: contradiction detected (index {index})"
+                ),
+                Metadata::Scalar => assert_eq!(
+                    value,
+                    ValueRef::Scalar(unsafe { &cell.scalar }),
+                    "`Segment::set`: contradiction detected (index {index})"
+                ),
+            }
+        }
+
+        *metadata = Metadata::from_value_ref(value);
+        cell.write(value);
+
+        Ok(())
+    }
+
     /// Attempts to assert that a memory cell in the segment has a given value.
     ///
     /// # Returns
@@ -147,6 +194,34 @@ impl Segment {
     ///
     /// - If it does not, the function fails and returns `Err(Error::Contradiction)`.
     pub fn assert_eq(&mut self, index: usize, value: ValueRef) -> Result<(), Error> {
+        self.grow_for_index(index)?;
+
+        // SAFETY:
+        //  We just made sure that the index is in bounds of the segment's initialized length.
+        let (metadata, cell) = unsafe { self.get_unchecked_raw_mut(index) };
+
+        let known = match *metadata {
+            Metadata::Unknown => {
+                // The cell is unknown.
+                // We can assert it to take the provided value.
+                *metadata = Metadata::from_value_ref(value);
+                cell.write(value);
+                return Ok(());
+            }
+            Metadata::Pointer => ValueRef::Pointer(unsafe { &cell.pointer }),
+            Metadata::Scalar => ValueRef::Scalar(unsafe { &cell.scalar }),
+        };
+
+        if known != value {
+            Err(Error::Contradiction)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Makes sure that the segment is large enough to contain a memory cell at the given
+    /// index.
+    fn grow_for_index(&mut self, index: usize) -> Result<(), Error> {
         // Ensure that the segment is big enough to store the requested index.
         if index >= self.capacity {
             // Attempt to amortize the cost of growing the segment by growing it by a factor of
@@ -183,27 +258,7 @@ impl Segment {
             self.length += 1;
         }
 
-        // SAFETY:
-        //  We just made sure that the index is in bounds of the segment's initialized length.
-        let (metadata, cell) = unsafe { self.get_unchecked_raw_mut(index) };
-
-        let known = match *metadata {
-            Metadata::Unknown => {
-                // The cell is unknown.
-                // We can assert it to take the provided value.
-                *metadata = Metadata::from_value_ref(value);
-                cell.write(value);
-                return Ok(());
-            }
-            Metadata::Pointer => ValueRef::Pointer(unsafe { &cell.pointer }),
-            Metadata::Scalar => ValueRef::Scalar(unsafe { &cell.scalar }),
-        };
-
-        if known != value {
-            Err(Error::Contradiction)
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 
     /// Attmepts to grow the capacity of the segment to a given value.

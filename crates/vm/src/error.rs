@@ -14,21 +14,26 @@ pub enum Error {
     /// The value of the second operand of an instruction could not be deduced from a builtin,
     /// a hint, or a previous assertion.
     CantDeduceOp1,
+    /// The destination of an instruction could not be deduced from a builtin, a hint, or a
+    /// previous assertion.
+    CantDeduceDst,
     /// A builtin failed to run correctly because of invalid input.
     Builtin,
     /// Attempted to construct a poitner from a value that cannot be represented within a
     /// the physical memory of the Cairo VM.
     PointerTooLarge,
-    /// Attempted to subtract a pointer from a scalar, which makes no sense.
-    SubtractPointer,
-    /// Attempted to divide by a pointer.
-    DivideByPointer,
-    /// Attempted to divide a pointer.
-    DividePointer,
+    /// Attempted to perform an invalid pointer arithmetic operation.
+    InvalidPointerArithmetic,
     /// Attempted to divide by zero.
     DivideByZero,
     /// Tried to perform a pointer operation on two pointers that had different provenances.
     IncoherentProvenance,
+    /// Attempted to jump to a scalar value with no associated provenance.
+    InvalidAbsoluteJump,
+    /// Attempted to jump to a pointer value with associated provenance.
+    InvalidRelativeJump,
+    /// Attempted to return to a scalar value with no associated provenance.
+    InvalidReturn,
 
     /// The value of one of the memory cells contradicted a previous assertion on that same
     /// memory cell.
@@ -54,4 +59,10 @@ pub enum Error {
     UndefinedOpCode,
     /// In a `Call` instruction, the only allowed `ApUpdate` value is `None`.
     UndefinedApUpdateInCall,
+    /// A conditional jump was used with invalid instruction values:
+    ///
+    /// 1. The result logic was not `Op1`
+    /// 2. The op-code was not `None`.
+    /// 3. The update logic of the **Allocation Pointer** was not `AddResult`.
+    UndefinedConditionalJump,
 }

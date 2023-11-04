@@ -1,6 +1,6 @@
 //! Defines the [`Value`] type.
 
-use num_traits::ToPrimitive;
+use num_traits::{ToPrimitive, Zero};
 use starknet_types_core::felt::Felt;
 
 use crate::error::Error;
@@ -26,7 +26,7 @@ impl Value {
         match self {
             Self::Scalar(left) => match other {
                 Self::Scalar(right) => Ok(Value::Scalar(left - right)),
-                Self::Pointer(_) => Err(Error::SubtractPointer),
+                Self::Pointer(_) => Err(Error::InvalidPointerArithmetic),
             },
             Self::Pointer(left) => match other {
                 Self::Scalar(right) => match right.to_usize() {
@@ -40,6 +40,25 @@ impl Value {
         }
     }
 
+    /// Attempts to add two [`Value`]s.
+    pub fn add(&self, other: &Self) -> Result<Self, Error> {
+        match self {
+            Self::Scalar(left) => match other {
+                Self::Scalar(right) => Ok(Value::Scalar(left + right)),
+                Self::Pointer(right) => Ok(right
+                    .wrapping_add(left.to_usize().ok_or(Error::PointerTooLarge)?)
+                    .into()),
+            },
+            Self::Pointer(left) => match other {
+                Self::Scalar(right) => match right.to_usize() {
+                    Some(right) => Ok(left.wrapping_add(right).into()),
+                    None => Err(Error::PointerTooLarge),
+                },
+                Self::Pointer(_) => Err(Error::InvalidPointerArithmetic),
+            },
+        }
+    }
+
     /// Attempts to divide two values.
     ///
     /// Note that only scalar can be used to divide other values.
@@ -48,11 +67,39 @@ impl Value {
             Self::Scalar(other) => match other.try_into() {
                 Ok(d) => match self {
                     Self::Scalar(n) => Ok(Value::Scalar(n.field_div(&d))),
-                    Self::Pointer(_) => Err(Error::DividePointer),
+                    Self::Pointer(_) => Err(Error::InvalidPointerArithmetic),
                 },
                 Err(_) => Err(Error::DivideByZero),
             },
-            Self::Pointer(_) => Err(Error::DivideByPointer),
+            Self::Pointer(_) => Err(Error::InvalidPointerArithmetic),
+        }
+    }
+
+    /// Attempts to multiply two values.
+    pub fn multiply(&self, other: &Self) -> Result<Self, Error> {
+        match self {
+            Self::Scalar(left) => match other {
+                Self::Scalar(right) => Ok(Value::Scalar(left * right)),
+                Self::Pointer(_) => Err(Error::InvalidPointerArithmetic),
+            },
+            Self::Pointer(_) => Err(Error::InvalidPointerArithmetic),
+        }
+    }
+
+    /// Creates a [`ValueRef`] from this [`Value`].
+    #[inline(always)]
+    pub fn as_ref(&self) -> ValueRef {
+        match self {
+            Self::Scalar(value) => ValueRef::Scalar(value),
+            Self::Pointer(pointer) => ValueRef::Pointer(pointer),
+        }
+    }
+
+    /// Returns whether this [`Value`] equals zero.
+    pub fn is_zero(&self) -> bool {
+        match self {
+            Self::Scalar(value) => value.is_zero(),
+            Self::Pointer(_) => false,
         }
     }
 }
@@ -90,6 +137,15 @@ impl PartialEq<Felt> for Value {
 }
 
 /// A reference to a [`Value`] that holds the discriminant inline.
+///
+/// # Notes
+///
+/// Using a custom reference type is required because:
+///
+/// 1. We don't want to have to copy a whole `Felt` value every time a memory cell is accessed.
+///
+/// 2. The memory doesn't directly store `Value`s in memory for layout efficiency reasons,
+///    preventing us from creating a reference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueRef<'a> {
     /// A scalar with no provenance information.

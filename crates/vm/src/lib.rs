@@ -100,6 +100,11 @@ impl CairoVM {
         compute_op1(&mut ctx, self)?;
         run_builtins(&mut ctx, self)?;
         deduce_from_op_code(&mut ctx, self)?;
+        update_ap(&mut ctx, self)?;
+        update_pc(&mut ctx, self)?;
+
+        // Apply the modifications to the memory.
+        apply_modifications(&mut ctx, self)?;
 
         Ok(())
     }
@@ -290,6 +295,7 @@ fn deduce_with_builtin(p: Pointer, vm: &CairoVM, result: &mut Value) -> Result<b
 }
 
 /// Runs the builtins when applicable to deduce the missing operands of an instruction.
+#[inline]
 fn run_builtins(ctx: &mut StepContext, vm: &CairoVM) -> Result<(), Error> {
     if !ctx.flags.has_op0() && deduce_with_builtin(ctx.op0_addr, vm, &mut ctx.op0)? {
         ctx.flags.insert(StepContextFlags::OP0_DEDUCED);
@@ -358,64 +364,231 @@ fn deduce_op0_from_op1(
     }
 }
 
+/// Deduces the missing operands of a `Call` instruction.
+#[inline]
+fn deduce_call(ctx: &mut StepContext, vm: &CairoVM) -> Result<(), Error> {
+    // When in a `Call` instruction, `op0`, must be asserted to
+    // `pc + instruction_size`.
+    let fp_plus_size = vm.cpu.fp.wrapping_add(ctx.flags.instruction_size());
+    if ctx.flags.has_op0() {
+        if ctx.op0 != fp_plus_size {
+            return Err(Error::Contradiction);
+        }
+    } else {
+        ctx.op0 = fp_plus_size.into();
+        ctx.flags.insert(StepContextFlags::OP0_DEDUCED);
+    }
+
+    // When in a `Call` instruction, `dst` is asserted to be equal to
+    // `fp`.
+    if ctx.flags.has_dst() {
+        if ctx.dst != vm.cpu.fp {
+            return Err(Error::Contradiction);
+        }
+    } else {
+        ctx.dst = vm.cpu.fp.into();
+        ctx.flags.insert(StepContextFlags::DST_DEDUCED);
+    }
+
+    Ok(())
+}
+
+/// Deduces the missing operands of an `AssertEq` instruction.
+#[inline]
+fn deduce_assert_eq(ctx: &mut StepContext) -> Result<(), Error> {
+    let res_logic = ctx.instruction.result_logic()?;
+
+    // With this op-code, we know that the result of the instruction must be
+    // asserted to be equal to `dst`.
+    // Of course, this is only relevent if we have already have the value of
+    // both `dst` and `op0` or `op1`.
+    if ctx.flags.has_dst() {
+        if !ctx.flags.has_op1() {
+            let op0 = if ctx.flags.has_op0() {
+                Some(&ctx.op0)
+            } else {
+                None
+            };
+
+            // We can deduce `op1`.
+            if deduce_op1_from_op0(res_logic, op0, &ctx.dst, &mut ctx.op1)? {
+                ctx.flags.insert(StepContextFlags::OP1_DEDUCED);
+            }
+        } else {
+            // Verify that the deduced value of `op1` is consistent with the
+            // value of `dst`.
+            let mut op1 = Value::Scalar(Felt::ZERO);
+            if deduce_op1_from_op0(res_logic, None, &ctx.dst, &mut op1)? && op1 != ctx.op1 {
+                return Err(Error::Contradiction);
+            }
+        }
+
+        if ctx.flags.has_op1() {
+            // We can deduce `op0`.
+            if !ctx.flags.has_op0() {
+                if deduce_op0_from_op1(res_logic, &ctx.op1, &ctx.dst, &mut ctx.op0)? {
+                    ctx.flags.insert(StepContextFlags::OP0_DEDUCED);
+                }
+            } else {
+                let mut op0 = Value::Scalar(Felt::ZERO);
+                if deduce_op0_from_op1(res_logic, &ctx.op1, &ctx.dst, &mut op0)? && op0 != ctx.op0 {
+                    return Err(Error::Contradiction);
+                }
+            }
+        }
+    } else {
+        // dst is not known, we have to know both op0 and op1.
+
+        if !ctx.flags.has_op0() || !ctx.flags.has_op1() {
+            return Err(Error::CantDeduceDst);
+        }
+
+        match res_logic {
+            ResultLogic::Op1 => {
+                // dst = op1
+                ctx.dst = ctx.op1;
+            }
+            ResultLogic::Add => {
+                // dst = op0 + op1
+                ctx.dst = ctx.op0.add(&ctx.op1)?;
+            }
+            ResultLogic::Mul => {
+                // dst = op0 * op1
+                ctx.dst = ctx.op0.multiply(&ctx.op1)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Attempt to deduce missing operands from the OP-Code of the instruction.
+///
+/// This function also populates the value of `res` with the result of the instruction.
 fn deduce_from_op_code(ctx: &mut StepContext, vm: &CairoVM) -> Result<(), Error> {
     match ctx.instruction.op_code()? {
         instr::OpCode::Call => {
-            // When in a `Call` instruction, `op0`, must be asserted to
-            // `pc + instruction_size`.
-            let fp_plus_size = vm.cpu.fp.wrapping_add(ctx.flags.instruction_size());
-            if ctx.flags.has_op0() {
-                if ctx.op0 != fp_plus_size {
-                    return Err(Error::Contradiction);
-                }
-            } else {
-                ctx.op0 = fp_plus_size.into();
-                ctx.flags.insert(StepContextFlags::OP0_DEDUCED);
-            }
+            deduce_call(ctx, vm)?;
 
-            // When in a `Call` instruction, `dst` is asserted to be equal to
-            // `fp`.
-            if ctx.flags.has_dst() {
-                if ctx.dst != vm.cpu.fp {
-                    return Err(Error::Contradiction);
-                }
-            } else {
-                ctx.dst = vm.cpu.fp.into();
-                ctx.flags.insert(StepContextFlags::DST_DEDUCED);
+            ctx.next_fp = vm.cpu.ap.wrapping_add(2);
+
+            if ctx.instruction.ap_update()? != instr::ApUpdate::None {
+                return Err(Error::UndefinedApUpdateInCall);
             }
         }
         instr::OpCode::AssertEq => {
-            // With this op-code, we know that the result of the instruction must be
-            // asserted to be equal to `dst`.
-            // Of course, this is only relevent if we have already have the value of
-            // both `dst` and `op0` or `op1`.
-            if ctx.flags.has_dst() {
-                let res_logic = ctx.instruction.result_logic()?;
+            deduce_assert_eq(ctx)?;
 
-                if !ctx.flags.has_op1() {
-                    let op0 = if ctx.flags.has_op0() {
-                        Some(&ctx.op0)
-                    } else {
-                        None
-                    };
+            ctx.res = ctx.dst;
+            ctx.flags.insert(StepContextFlags::RES_COMPUTED);
 
-                    // We can deduce `op1`.
-                    if deduce_op1_from_op0(res_logic, op0, &ctx.dst, &mut ctx.op1)? {
-                        ctx.flags.insert(StepContextFlags::OP1_DEDUCED);
-                    }
-                }
+            ctx.next_fp = vm.cpu.fp;
+        }
+        instr::OpCode::None => {
+            ctx.next_fp = vm.cpu.fp;
+        }
+        instr::OpCode::Ret => {
+            ctx.next_fp = match ctx.op0 {
+                Value::Scalar(_) => return Err(Error::InvalidReturn),
+                Value::Pointer(p) => p,
+            };
+        }
+    }
 
-                if ctx.flags.has_op1() && !ctx.flags.has_op0() {
-                    // We can deduce `op0`.
-                    if deduce_op0_from_op1(res_logic, &ctx.op1, &ctx.dst, &mut ctx.op0)? {
-                        ctx.flags.insert(StepContextFlags::OP0_DEDUCED);
-                    }
-                }
+    Ok(())
+}
+
+/// Updates the next **Allocation Pointer** of the provided [`StepContext`].
+fn update_ap(ctx: &mut StepContext, vm: &CairoVM) -> Result<(), Error> {
+    match ctx.instruction.ap_update()? {
+        instr::ApUpdate::None => {
+            if ctx.instruction.op_code()? == instr::OpCode::Call {
+                ctx.next_ap = vm.cpu.ap.wrapping_add(2);
+            } else {
+                ctx.next_ap = vm.cpu.ap;
             }
         }
-        _ => (),
+        instr::ApUpdate::AddResult => {
+            debug_assert!(ctx.flags.has_res());
+            match ctx.res {
+                Value::Scalar(_) => return Err(Error::UndefinedApUpdate),
+                Value::Pointer(p) => ctx.next_ap = vm.cpu.ap.wrapping_add(p.offset),
+            }
+        }
+        instr::ApUpdate::Increment => {
+            ctx.next_ap = vm.cpu.ap.wrapping_add(1);
+        }
     }
+
+    Ok(())
+}
+
+/// Updates the next **Program Counter** of the provided [`StepContext`].
+fn update_pc(ctx: &mut StepContext, vm: &CairoVM) -> Result<(), Error> {
+    match ctx.instruction.pc_update()? {
+        instr::PcUpdate::Regular => {
+            ctx.next_pc = vm.cpu.pc.wrapping_add(ctx.flags.instruction_size());
+        }
+        instr::PcUpdate::AbsoluteJump => {
+            ctx.next_pc = match ctx.res {
+                Value::Pointer(p) => p,
+                Value::Scalar(_) => return Err(Error::InvalidAbsoluteJump),
+            };
+        }
+        instr::PcUpdate::RelativeJump => {
+            ctx.next_pc = match ctx.res {
+                Value::Pointer(_) => return Err(Error::InvalidRelativeJump),
+                Value::Scalar(s) => vm
+                    .cpu
+                    .pc
+                    .wrapping_add(s.to_usize().ok_or(Error::PointerTooLarge)?),
+            };
+        }
+        instr::PcUpdate::ConditionalJump => {
+            if ctx.dst.is_zero() {
+                vm.cpu.pc.wrapping_add(ctx.flags.instruction_size());
+            } else {
+                debug_assert!(ctx.flags.has_res());
+                match ctx.res {
+                    Value::Pointer(_) => return Err(Error::InvalidRelativeJump),
+                    Value::Scalar(s) => vm
+                        .cpu
+                        .pc
+                        .wrapping_add(s.to_usize().ok_or(Error::PointerTooLarge)?),
+                };
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Applies the modifications to the memory.
+fn apply_modifications(ctx: &mut StepContext, vm: &mut CairoVM) -> Result<(), Error> {
+    debug_assert!(ctx.flags.has_dst());
+    debug_assert!(ctx.flags.has_op0());
+    debug_assert!(ctx.flags.has_op1());
+
+    // SAFETY:
+    //  We know that the segments referenced by `dst_addr`, `op0_addr` and `op1_addr`
+    //  are always valid by invariant of `CairoVM`.
+    if ctx.flags.has_dst() {
+        let dst_segment = unsafe { vm.memory.segment_unchecked_mut(ctx.dst_addr.segment) };
+        dst_segment.set(ctx.dst_addr.offset, ctx.dst.as_ref())?;
+    }
+    if ctx.flags.has_op0() {
+        let op0_segment = unsafe { vm.memory.segment_unchecked_mut(ctx.op0_addr.segment) };
+        op0_segment.set(ctx.op0_addr.offset, ctx.op0.as_ref())?;
+    }
+    if ctx.flags.has_op1() {
+        let op1_segment = unsafe { vm.memory.segment_unchecked_mut(ctx.op1_addr.segment) };
+        op1_segment.set(ctx.op1_addr.offset, ctx.op1.as_ref())?;
+    }
+
+    // Update the registers.
+    vm.cpu.fp = ctx.next_fp;
+    vm.cpu.ap = ctx.next_ap;
+    vm.cpu.pc = ctx.next_pc;
 
     Ok(())
 }
@@ -442,6 +615,8 @@ bitflags! {
         /// Whether the second operand of the instruction was asserted by some
         /// already existing memory cell.
         const OP1_ASSERTED = 1 << 5;
+        /// Whether the result of the instruction was previously computed.
+        const RES_COMPUTED = 1 << 6;
         /// The instruction has a size of two cells instead of one.
         const SIZE_TWO = 1 << 7;
     }
@@ -464,6 +639,12 @@ impl StepContextFlags {
     #[inline(always)]
     pub const fn has_op1(self) -> bool {
         self.contains(Self::OP1_ASSERTED.union(Self::OP1_DEDUCED))
+    }
+
+    /// Returns whether the result of the instruction is known.
+    #[inline(always)]
+    pub const fn has_res(self) -> bool {
+        self.contains(Self::RES_COMPUTED)
     }
 
     /// Returns the size of the instruction in memory cells.
@@ -499,6 +680,8 @@ struct StepContext {
     ///
     /// Only holds a meaningful value if the `OP1_ASSERTED` flag or the `OP1_DEDUCED` flag is set.
     pub op1: Value,
+    /// The value of the result of the instruction being decoded.
+    pub res: Value,
     /// Some flags associated with the context.
     pub flags: StepContextFlags,
     /// The next value of the **Frame Pointer**.
@@ -533,6 +716,7 @@ impl StepContext {
                 offset: 0,
             },
             op1: Value::Scalar(Felt::ZERO),
+            res: Value::Scalar(Felt::ZERO),
             flags: StepContextFlags::empty(),
             next_fp: Pointer {
                 segment: 0,
